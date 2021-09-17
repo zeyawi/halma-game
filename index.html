@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>pretty you</title>
+    <style>
+        body{
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        button{
+            margin-top: 1%;
+            width: 80px;
+            height: 36px;
+            border: none;
+            border-radius: 3px;
+            background: #438ef7;
+            color: white;
+            display: block;
+        }
+        button:active{
+            background: #5ea7f7;
+        }
+        li{
+            font-size: 16px;
+            letter-spacing: 3px;
+        }
+    </style>
+</head>
+<body>
+    <ul>
+        <li>游戏目标: 将所有圆圈都移到最右上角使得移动步数最少</li>
+        <li>移动方式: 点击 ⭕ 选中，点击空白以移动 ⭕️ </li>
+        <li>移动限制: ⭕ 只能移动到相邻,对角,️跨越 ⭕️ 情况下的空白 </li>
+    </ul>
+
+    <h2>
+        <span>move:</span>
+        <span id="statistical"></span>
+    </h2>
+    <canvas id="canvas"></canvas>
+    <button id="new-game-btn">new game</button>
+    <script>
+        let kBoardWidth = 9;
+        let kBoardHeight= 9;
+        let kPieceWidth = 60;
+        let kPieceHeight= 60;
+        let kPixelWidth = 1 + (kBoardWidth * kPieceWidth);
+        let kPixelHeight= 1 + (kBoardHeight * kPieceHeight);
+
+        let gCanvasElement;
+        let gDrawingContext;
+        let gPattern;
+
+        let gPieces;
+        let gNumPieces;
+        let gSelectedPieceIndex;
+        let gSelectedPieceHasMoved;
+        let gMoveCount;
+        let gMoveCountElem;
+        let gGameInProgress;
+
+        function Cell(row, column) {
+            this.row = row;
+            this.column = column;
+        }
+
+        function getCursorPosition(event) {
+            /* returns Cell with .row and .column properties */
+            let x;
+            let y;
+            if (event.pageX !== undefined && event.pageY !== undefined) {
+                x = event.pageX;
+                y = event.pageY;
+            }
+            else {
+                x = event.clientX + document.body.scrollLeft + document.documentElement.scrollLeft;
+                y = event.clientY + document.body.scrollTop + document.documentElement.scrollTop;
+            }
+            x -= gCanvasElement.offsetLeft;
+            y -= gCanvasElement.offsetTop;
+            x = Math.min(x, kBoardWidth * kPieceWidth);
+            y = Math.min(y, kBoardHeight * kPieceHeight);
+            return new Cell(Math.floor(y / kPieceHeight), Math.floor(x / kPieceWidth));
+        }
+
+        function halmaOnClick(e) {
+            let cell = getCursorPosition(e);
+            for (let i = 0; i < gNumPieces; i++) {
+                if ((gPieces[i].row === cell.row) && (gPieces[i].column === cell.column)) {
+                    clickOnPiece(i);
+                    return;
+                }
+            }
+            clickOnEmptyCell(cell);
+        }
+
+        function clickOnEmptyCell(cell) {
+            if (gSelectedPieceIndex === -1) { return; }
+            let rowDiff = Math.abs(cell.row - gPieces[gSelectedPieceIndex].row);
+            let columnDiff = Math.abs(cell.column - gPieces[gSelectedPieceIndex].column);
+            if ((rowDiff <= 1) &&
+                (columnDiff <= 1)) {
+                /* we already know that this click was on an empty square,
+                   so that must mean this was a valid single-square move */
+                gPieces[gSelectedPieceIndex].row = cell.row;
+                gPieces[gSelectedPieceIndex].column = cell.column;
+                gMoveCount += 1;
+                gSelectedPieceIndex = -1;
+                gSelectedPieceHasMoved = false;
+                drawBoard();
+                return;
+            }
+            if ((((rowDiff === 2) && (columnDiff === 0)) ||
+                    ((rowDiff === 0) && (columnDiff === 2)) ||
+                    ((rowDiff === 2) && (columnDiff === 2))) &&
+                isThereAPieceBetween(gPieces[gSelectedPieceIndex], cell)) {
+                /* this was a valid jump */
+                if (!gSelectedPieceHasMoved) {
+                    gMoveCount += 1;
+                }
+                gSelectedPieceHasMoved = true;
+                gPieces[gSelectedPieceIndex].row = cell.row;
+                gPieces[gSelectedPieceIndex].column = cell.column;
+                drawBoard();
+                return;
+            }
+            gSelectedPieceIndex = -1;
+            gSelectedPieceHasMoved = false;
+            drawBoard();
+        }
+
+        function clickOnPiece(pieceIndex) {
+            if (gSelectedPieceIndex === pieceIndex) { return; }
+            gSelectedPieceIndex = pieceIndex;
+            gSelectedPieceHasMoved = false;
+            drawBoard();
+        }
+
+        function isThereAPieceBetween(cell1, cell2) {
+            /* note: assumes cell1 and cell2 are 2 squares away
+               either vertically, horizontally, or diagonally */
+            let rowBetween = (cell1.row + cell2.row) / 2;
+            let columnBetween = (cell1.column + cell2.column) / 2;
+            for (let i = 0; i < gNumPieces; i++) {
+                if ((gPieces[i].row === rowBetween) &&
+                    (gPieces[i].column === columnBetween)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        function isTheGameOver() {
+            for (let i = 0; i < gNumPieces; i++) {
+                if (gPieces[i].row > 2) {
+                    return false;
+                }
+                if (gPieces[i].column < (kBoardWidth - 3)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        function drawBoard() {
+            if (gGameInProgress && isTheGameOver()) {
+                endGame();
+            }
+
+            gDrawingContext.clearRect(0, 0, kPixelWidth, kPixelHeight);
+
+            gDrawingContext.beginPath();
+
+            /* vertical lines */
+            for (let x = 0; x <= kPixelWidth; x += kPieceWidth) {
+                gDrawingContext.moveTo(0.5 + x, 0);
+                gDrawingContext.lineTo(0.5 + x, kPixelHeight);
+            }
+
+            /* horizontal lines */
+            for (let y = 0; y <= kPixelHeight; y += kPieceHeight) {
+                gDrawingContext.moveTo(0, 0.5 + y);
+                gDrawingContext.lineTo(kPixelWidth, 0.5 +  y);
+            }
+
+            /* draw it! */
+            gDrawingContext.strokeStyle = "#ccc";
+            gDrawingContext.stroke();
+
+            for (let i = 0; i < 9; i++) {
+                drawPiece(gPieces[i], i === gSelectedPieceIndex);
+            }
+
+            gMoveCountElem.innerHTML = gMoveCount;
+
+            saveGameState();
+        }
+
+        if (typeof resumeGame != "function") {
+            saveGameState = function() {
+                return false;
+            }
+            resumeGame = function() {
+                return false;
+            }
+        }
+
+        function drawPiece(p, selected) {
+            let column = p.column;
+            let row = p.row;
+            let x = (column * kPieceWidth) + (kPieceWidth/2);
+            let y = (row * kPieceHeight) + (kPieceHeight/2);
+            let radius = (kPieceWidth/2) - (kPieceWidth/10);
+            gDrawingContext.beginPath();
+            gDrawingContext.arc(x, y, radius, 0, Math.PI*2, false);
+            gDrawingContext.closePath();
+            gDrawingContext.strokeStyle = "#000";
+            gDrawingContext.stroke();
+            if (selected) {
+                gDrawingContext.fillStyle = "#000";
+                gDrawingContext.fill();
+            }
+        }
+
+        function newGame() {
+            gPieces = [new Cell(kBoardHeight - 3, 0),
+                new Cell(kBoardHeight - 2, 0),
+                new Cell(kBoardHeight - 1, 0),
+                new Cell(kBoardHeight - 3, 1),
+                new Cell(kBoardHeight - 2, 1),
+                new Cell(kBoardHeight - 1, 1),
+                new Cell(kBoardHeight - 3, 2),
+                new Cell(kBoardHeight - 2, 2),
+                new Cell(kBoardHeight - 1, 2)];
+            gNumPieces = gPieces.length;
+            gSelectedPieceIndex = -1;
+            gSelectedPieceHasMoved = false;
+            gMoveCount = 0;
+            gGameInProgress = true;
+            drawBoard();
+        }
+
+        function endGame() {
+            gSelectedPieceIndex = -1;
+            gGameInProgress = false;
+        }
+
+        function initGame(canvasElement, moveCountElement) {
+            if (!canvasElement) {
+                canvasElement = document.createElement("canvas");
+                canvasElement.id = "halma_canvas";
+                document.body.appendChild(canvasElement);
+            }
+            if (!moveCountElement) {
+                moveCountElement = document.createElement("p");
+                document.body.appendChild(moveCountElement);
+            }
+            gCanvasElement = canvasElement;
+            gCanvasElement.width = kPixelWidth;
+            gCanvasElement.height = kPixelHeight;
+            gCanvasElement.addEventListener("click", halmaOnClick, false);
+            gMoveCountElem = moveCountElement;
+            gDrawingContext = gCanvasElement.getContext("2d");
+            if (!resumeGame()) {
+                newGame();
+            }
+        }
+
+        gCanvasElement = document.getElementById('canvas');
+        gMoveCountElem = document.getElementById('statistical');
+        newGameButton = document.getElementById('new-game-btn');
+        initGame(gCanvasElement,gMoveCountElem);
+
+        newGameButton.onclick = function (){
+            newGame();
+        }
+
+    </script>
+</body>
+</html>
